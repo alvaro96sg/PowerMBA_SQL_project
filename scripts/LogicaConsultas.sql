@@ -199,13 +199,13 @@ from film f
 
 -- 19. Encuentra el título de las películas que son comedias y tienen una duración mayor a 180 minutos en la tabla “film”.
 
-select f.film_id as "ID_pelicula", f.title as "titulo_pelicula", c.name as "categoria"
+select f.film_id as "ID_pelicula", f.title as "titulo_pelicula", c.name as "categoria", f.length as "duracion"
 from film f
 left join film_category fc 
 	on f.film_id = fc.film_id
 left join category c 
 	on c.category_id = fc.category_id
-where c.name  = 'Comedy'
+where c.name  = 'Comedy' and f.length > 180
 ;
 
 -- 20. Encuentra las categorías de películas que tienen un promedio de duración superior a 110 minutos 
@@ -365,24 +365,17 @@ having count(a.actor_id) > 40
 
 -- 29. Obtener todas las películas y, si están disponibles en el inventario, mostrar la cantidad disponible.
 
-	/*
-	 * film > inventory > rental > IF return_date is NULL THEN no disponible (una de la cantidad total de ellas).
-	 * Contar cantidad de NOT NULL.
-	 * Las películas pueden estar en distintas tiendas luego deberemos agrupar por 'store_id' y 'film_id'.
-	 * y consultar 'store_id', 'film_id' y 'title_id'.
-	 */
-	
-select	i.store_id as "ID_tienda", i.film_id as "ID_pelicula", f.title as "titulo_pelicula",
-		count(*) as "total_disponibles"
+select i.film_id, f.title as "titulo_pelicula", count(*) as copias_disponibles
 from inventory i
-inner join rental r 
-	on i.inventory_id = r.inventory_id
 inner join film f 
-	on i.film_id = f.film_id 
-where r.return_date is not null -- aquellas disponibles
-group by i.store_id, i.film_id, f.title 
-order by "titulo_pelicula" 
-;
+	on i.film_id = f.film_id
+where i.inventory_id not in (
+    select r.inventory_id
+    from rental r
+    where r.return_date is null
+)
+group by i.film_id, f.title
+order by i.film_id ;
 
 -- 30. Obtener los actores y el número de películas en las que ha actuado.
 
@@ -451,18 +444,20 @@ order by a.actor_id, f.film_id
 -- 33.  Obtener todas las películas que tenemos y todos los registros de alquiler.
 	
 	/*
-	 * Como nos interesan los registros de alquiler usaremos INNER JOIN para que muestre
-	 * solo las peliculas registradas como alquiladas.
+	 * Como nos interesan los registros de alquiler usaremos LEFT JOIN para que muestre
+	 * las películas y sus correspondientes registros de alquiler, mostrando también aquellas que
+	 * nunca han sido alquiladas.
 	 */
 	
 	select 	f.film_id as "ID_pelicula", f.title as "titulo_pelicula", 
 			r.rental_id as "ID_alquiler", r.rental_date as "fecha_alquiler", r.customer_id as "ID_cliente"
 	from film f 
-	inner join inventory i 
+	left join inventory i 
 		on f.film_id = i.film_id 
-	inner join rental r 
+	left join rental r 
 		on i.inventory_id = r.inventory_id
 	order by "ID_pelicula";
+	
 	
 -- 34. Encuentra los 5 clientes que más dinero se hayan gastado con nosotros.
 
@@ -768,7 +763,9 @@ group by c.category_id
 
 -- 51. Crea una tabla temporal llamada “cliente_rentas_temporal” para almacenar el total de alquileres por cliente.
 
-with clientes_rentas_temporal as (
+drop table if exists clientes_rentas_temporal;
+
+create temporary table clientes_rentas_temporal as 
 	select c.customer_id as "ID_cliente", concat(c.first_name,' ', c.last_name) as "nombre_cliente", count(*) as "total_alquileres"
 	from rental r 
 	inner join customer c 
@@ -778,9 +775,11 @@ with clientes_rentas_temporal as (
 	inner join film f 
 		on i.film_id = f.film_id
 	group by c.customer_id 
-	)
+;
+	
 select *
-from clientes_rentas_temporal;
+from clientes_rentas_temporal
+;
 
 -- 52. Crea una tabla temporal llamada “peliculas_alquiladas” que almacene 
 -- las películas que han sido alquiladas al menos 10 veces.
@@ -945,31 +944,47 @@ order by a.first_name, a.last_name
  * Opción 1. Usando EXTRACT(DAY FROM...).
  */
 
-select f.film_id as "ID_pelicula", f.title as "titulo_pelicula", max(r.return_date - r.rental_date) as "max_tiempo_alquilada" 
-from film f 
+select distinct f.film_id as "ID_pelicula", f.title as "titulo_pelicula"
+from film f
 left join inventory i 
 	on f.film_id = i.film_id
 left join rental r 
 	on i.inventory_id = r.inventory_id
 where extract(day from (r.return_date - r.rental_date)) >= 8
-group by f.film_id
-order by "titulo_pelicula"
+order by f.film_id 
 ;
+
+	/*
+	 * Una pequeña comprobación de cuáles de las películas han sido alquiladas por más de 8 días y cuántos tiempo.
+	 */
+
+	with cte1 as (
+	select f.film_id as "ID_pelicula", f.title as "titulo_pelicula", r.return_date - r.rental_date as "tiempo_alquilada"
+	from film f
+	left join inventory i 
+		on f.film_id = i.film_id
+	left join rental r 
+		on i.inventory_id = r.inventory_id
+	order by f.film_id 
+	)
+	select * from cte1 
+	where extract(day from "tiempo_alquilada") >= 8
+	;
 
 /*
  * Opción 2. Usando EXTRACT(EPOCH FROM ...).
  */
 
-select f.film_id as "ID_pelicula", f.title as "titulo_pelicula", max(r.return_date - r.rental_date) as "max_tiempo_alquilada" 
-from film f 
+select distinct f.film_id as "ID_pelicula", f.title as "titulo_pelicula"
+from film f
 left join inventory i 
 	on f.film_id = i.film_id
 left join rental r 
 	on i.inventory_id = r.inventory_id
 where extract(epoch from (r.return_date - r.rental_date))/(3600*24) >= 8
-group by f.film_id
-order by "titulo_pelicula"
+order by f.film_id 
 ;
+
 
 -- 58. Encuentra el título de todas las películas que son de la misma categoría que ‘Animation’.
 
